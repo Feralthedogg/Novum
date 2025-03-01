@@ -1,3 +1,5 @@
+// pkg/contract/contract.go
+
 package contract
 
 import "fmt"

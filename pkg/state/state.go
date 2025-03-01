@@ -1,3 +1,5 @@
+// pkg/state/state.go
+
 package state
 
 type StateLayer struct {

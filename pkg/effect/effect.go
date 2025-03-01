@@ -1,3 +1,5 @@
+// pkg/effect/effect.go
+
 package effect
 
 import "fmt"
