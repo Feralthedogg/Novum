@@ -3,10 +3,10 @@ package main
 import (
 	"fmt"
 
-	"github.com/Feralthedogg/novum/pkg/contract"
-	"github.com/Feralthedogg/novum/pkg/effect"
-	"github.com/Feralthedogg/novum/pkg/module"
-	"github.com/Feralthedogg/novum/pkg/state"
+	"github.com/Feralthedogg/Novum/pkg/contract"
+	"github.com/Feralthedogg/Novum/pkg/effect"
+	"github.com/Feralthedogg/Novum/pkg/module"
+	"github.com/Feralthedogg/Novum/pkg/state"
 )
 
 type NetworkModule interface {
