@@ -36,28 +36,28 @@ func main() {
 		Bind(func(n int, deps module.Container[NetworkModule]) composite.NovumComposite[int, module.Container[NetworkModule]] {
 			newValue := n + 10
 			return composite.Return(newValue, deps).
-				WithEffect(effect.LogEffect("Added 10 to the value"))
+				WithEffect(effect.NewLogEffect("Added 10 to the value"))
 		}).
 		// Bind: multiply the value by 2.
 		Bind(func(n int, deps module.Container[NetworkModule]) composite.NovumComposite[int, module.Container[NetworkModule]] {
 			newValue := n * 2
 			return composite.Return(newValue, deps).
-				WithEffect(effect.LogEffect("Multiplied the value by 2"))
+				WithEffect(effect.NewLogEffect("Multiplied the value by 2"))
 		}).
 		// Bind: log that the network module is registered.
 		Bind(func(n int, deps module.Container[NetworkModule]) composite.NovumComposite[int, module.Container[NetworkModule]] {
 			return composite.Return(n, deps).
-				WithEffect(effect.LogEffect("Network module is registered"))
+				WithEffect(effect.NewLogEffect("Network module is registered"))
 		}).
 		// Bind: use the network module to fetch data.
 		Bind(func(n int, deps module.Container[NetworkModule]) composite.NovumComposite[int, module.Container[NetworkModule]] {
 			data, err := deps.GetNetwork().Fetch("https://api.example.com/data")
 			if err != nil {
 				return composite.Return(n, deps).
-					WithEffect(effect.LogEffect("Error fetching data from network"))
+					WithEffect(effect.NewLogEffect("Error fetching data from network"))
 			}
 			return composite.Return(n, deps).
-				WithEffect(effect.LogEffect("Fetched data: " + data))
+				WithEffect(effect.NewLogEffect("Fetched data: " + data))
 		})
 
 	// Initialize the state (e.g., a counter starting at 0).

@@ -6,7 +6,7 @@ import "fmt"
 
 type EffectFunc func() error
 
-func LogEffect(message string) EffectFunc {
+func NewLogEffect(message string) EffectFunc {
 	return func() error {
 		fmt.Println(message)
 		return nil
