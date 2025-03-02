@@ -4,19 +4,15 @@ package effect
 
 import "fmt"
 
-type Effect interface {
-	Handle() error
+type EffectFunc func() error
+
+func LogEffect(message string) EffectFunc {
+	return func() error {
+		fmt.Println(message)
+		return nil
+	}
 }
 
-type LogEffect struct {
-	Message string
-}
-
-func (le LogEffect) Handle() error {
-	fmt.Println(le.Message)
-	return nil
-}
-
-func Perform(e Effect) error {
-	return e.Handle()
+func Perform(e EffectFunc) error {
+	return e()
 }

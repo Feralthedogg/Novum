@@ -23,57 +23,48 @@ func (n DefaultNetworkModule) Fetch(url string) (string, error) {
 }
 
 func main() {
-	// Build a composite chain with an initial integer value.
-	comp := composite.Return(10).
+	// Create a compile-time dependency container with the network module.
+	deps := module.NewContainer[NetworkModule](DefaultNetworkModule{})
+
+	// Create a composite chain with an initial value of 10 and the injected dependencies.
+	comp := composite.Return(10, deps).
 		// Set a contract to ensure the value is non-negative.
 		WithContract(func(n int) bool {
 			return n >= 0
 		}).
-		// Bind operation: add 10 to the value.
-		Bind(func(n int) composite.NovumComposite[int] {
+		// Bind: add 10 to the value.
+		Bind(func(n int, deps module.Container[NetworkModule]) composite.NovumComposite[int, module.Container[NetworkModule]] {
 			newValue := n + 10
-			return composite.Return(newValue).
-				WithEffect(effect.LogEffect{Message: "Added 10 to the value"})
+			return composite.Return(newValue, deps).
+				WithEffect(effect.LogEffect("Added 10 to the value"))
 		}).
-		// Bind operation: multiply the value by 2.
-		Bind(func(n int) composite.NovumComposite[int] {
+		// Bind: multiply the value by 2.
+		Bind(func(n int, deps module.Container[NetworkModule]) composite.NovumComposite[int, module.Container[NetworkModule]] {
 			newValue := n * 2
-			return composite.Return(newValue).
-				WithEffect(effect.LogEffect{Message: "Multiplied the value by 2"})
+			return composite.Return(newValue, deps).
+				WithEffect(effect.LogEffect("Multiplied the value by 2"))
 		}).
-		// Bind operation: register a network module.
-		Bind(func(n int) composite.NovumComposite[int] {
-			cont := module.NewContainer()
-			cont.Register("network", DefaultNetworkModule{})
-			return composite.Return(n).
-				WithModule(cont).
-				WithEffect(effect.LogEffect{Message: "Registered network module"})
+		// Bind: log that the network module is registered.
+		Bind(func(n int, deps module.Container[NetworkModule]) composite.NovumComposite[int, module.Container[NetworkModule]] {
+			return composite.Return(n, deps).
+				WithEffect(effect.LogEffect("Network module is registered"))
 		}).
-		// Bind operation: simulate network module usage.
-		Bind(func(n int) composite.NovumComposite[int] {
-			// For demonstration, attempt to resolve the "network" module.
-			// Note: This uses a workaround since the module container is not directly
-			// accessible inside the Bind function.
-			mod, ok := composite.Return(n).ResolveModule("network")
-			if ok {
-				network := mod.(NetworkModule)
-				data, err := network.Fetch("https://api.example.com/data")
-				if err != nil {
-					return composite.Return(n).
-						WithEffect(effect.LogEffect{Message: "Error fetching data from network"})
-				}
-				return composite.Return(n).
-					WithEffect(effect.LogEffect{Message: "Fetched data: " + data})
+		// Bind: use the network module to fetch data.
+		Bind(func(n int, deps module.Container[NetworkModule]) composite.NovumComposite[int, module.Container[NetworkModule]] {
+			data, err := deps.GetNetwork().Fetch("https://api.example.com/data")
+			if err != nil {
+				return composite.Return(n, deps).
+					WithEffect(effect.LogEffect("Error fetching data from network"))
 			}
-			return composite.Return(n).
-				WithEffect(effect.LogEffect{Message: "Network module not found"})
+			return composite.Return(n, deps).
+				WithEffect(effect.LogEffect("Fetched data: " + data))
 		})
 
 	// Initialize the state (e.g., a counter starting at 0).
 	initialState := state.NewStateLayer(0)
 
 	// Execute the composite chain.
-	finalValue, finalState, effects, modules, err := comp.Run(initialState)
+	finalValue, finalState, effects, err := comp.Run(initialState)
 
 	// Print the results.
 	if err != nil {
@@ -82,15 +73,9 @@ func main() {
 		fmt.Printf("Final Value: %d\n", finalValue)
 		fmt.Printf("Final State: %+v\n", finalState)
 		fmt.Println("Accumulated Effects:")
-		for _, e := range effects {
-			if logEff, ok := e.(effect.LogEffect); ok {
-				fmt.Println(" -", logEff.Message)
-			}
-		}
-		if modules != nil {
-			if mod, ok := modules.Resolve("network"); ok {
-				fmt.Println("Network module is registered:", mod)
-			}
+		// Execute each side effect.
+		for _, eff := range effects {
+			_ = eff()
 		}
 	}
 }

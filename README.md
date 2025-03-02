@@ -21,7 +21,7 @@ go get github.com/Feralthedogg/Novum
 ---
 
 ## Quick Start
-Here is a brief example demonstrating the main features of Novum.
+Below is a brief example demonstrating the main features of Novum.
 
 ```go
 package main
@@ -29,10 +29,10 @@ package main
 import (
 	"fmt"
 
-	"github.com/Feralthedogg/Novum/contract"
-	"github.com/Feralthedogg/Novum/effect"
-	"github.com/Feralthedogg/Novum/module"
-	"github.com/Feralthedogg/Novum/state"
+	"github.com/Feralthedogg/Novum/pkg/contract"
+	"github.com/Feralthedogg/Novum/pkg/effect"
+	"github.com/Feralthedogg/Novum/pkg/module"
+	"github.com/Feralthedogg/Novum/pkg/state"
 )
 
 func main() {
@@ -42,13 +42,13 @@ func main() {
 	fmt.Println("Counter:", s.Counter) // Output: Counter: 1
 
 	// 2. Effect Handling: Execute a log effect.
-	err := effect.Perform(effect.LogEffect{Message: "Processing data..."})
+	err := effect.Perform(effect.LogEffect("Processing data..."))
 	if err != nil {
 		fmt.Println("Effect error:", err)
 	}
 
 	// 3. Module System: Register and resolve a network module.
-	container := module.NewContainer()
+	container := module.NewContainer(DefaultNetworkModule{})
 	container.Register("network", DefaultNetworkModule{})
 	if mod, ok := container.Resolve("network"); ok {
 		network := mod.(NetworkModule)
@@ -102,14 +102,14 @@ func Add(a, b int) int {
 - **Explicit Side Effect Separation:**  
   Side effects like logging, network I/O, or file operations are encapsulated via the `Effect` interface. This design separates pure functions from impure ones.
 - **Optimized Side Effect Processing:**  
-  The side effect functions are written simply, allowing them to be efficiently executed and easily inlined by the compiler.
+  The side effect functions are simple and can be efficiently executed and inlined by the compiler.
 
 ### API
-- **`Effect` Interface**  
-  All side effects must implement the `Handle() error` method.
-- **`LogEffect` Structure**  
-  Represents a simple logging effect with a message.
-- `Perform(e Effect) error`  
+- **`EffectFunc` Type**  
+  A function type that represents a side effect.
+- **`LogEffect` Function**  
+  Returns an `EffectFunc` that logs a given message.
+- `Perform(e EffectFunc) error`  
   Executes the given side effect.
 
 ---
@@ -120,15 +120,17 @@ func Add(a, b int) int {
 - **Static Type-Based Dependency Injection:**  
   Novum uses static typing for its module system, ensuring dependencies are resolved at compile time.
 - **Simple Container Implementation:**  
-  A straightforward container allows modules to be registered and looked up using a map, keeping the design simple and efficient.
+  A straightforward container allows modules to be registered and looked up using a map.
 
 ### API
-- `NewContainer() *Container`  
-  Creates a new module container.
-- `(c *Container) Register(name string, module interface{})`  
+- `NewContainer(network NetworkT) Container[NetworkT]`  
+  Creates a new module container with a provided network module.
+- `(c Container[NetworkT]) Register(name string, module interface{})`  
   Registers a module under the specified name.
-- `(c *Container) Resolve(name string) (interface{}, bool)`  
+- `(c Container[NetworkT]) Resolve(name string) (interface{}, bool)`  
   Retrieves a registered module by name.
+- `(c Container[NetworkT]) GetNetwork() NetworkT`  
+  Retrieves the network module.
 
 ---
 
@@ -138,7 +140,7 @@ func Add(a, b int) int {
 - **Design by Contract:**  
   Novum includes a lightweight system to assert preconditions and postconditions in your functions. If conditions fail, the system will alert you immediately.
 - **Optional Enforcement:**  
-  Contracts can be enabled during development for safety and debugging, and selectively disabled in production for performance.
+  Contracts can be enabled during development for safety and debugging, and selectively disabled in production.
 
 ### API
 - `Assert(condition bool, msg string)`  
@@ -162,20 +164,20 @@ Novum Composite integrates state management, effect handling, module system, and
   Any error in the chain will be captured and prevent further processing.
 
 ### API
-- `Return[T any](value T) NovumComposite[T]`  
-  Wraps a value into a composite with default settings.
-- `Bind(func(T) NovumComposite[T]) NovumComposite[T]`  
+- `Return[T any, Deps any](value T, deps Deps) NovumComposite[T, Deps]`  
+  Wraps a value and its dependencies into a composite with default settings.
+- `Bind(func(T, Deps) NovumComposite[T, Deps]) NovumComposite[T, Deps]`  
   Chains operations while combining state transitions and side effects.
-- `WithEffect(e Effect) NovumComposite[T]`  
+- `WithEffect(e EffectFunc) NovumComposite[T, Deps]`  
   Appends a side effect to the composite.
-- `WithContract(func(T) bool) NovumComposite[T]`  
+- `WithContract(func(T) bool) NovumComposite[T, Deps]`  
   Sets the contract function for value validation.
-- `WithModule(*Container) NovumComposite[T]`  
+- `WithModule(deps Deps) NovumComposite[T, Deps]`  
   Sets the module container for dependency injection.
 - `ResolveModule(name string) (interface{}, bool)`  
   Retrieves a module by name from the attached module container.
-- `Run(initialState StateLayer) (T, StateLayer, []Effect, *Container, error)`  
-  Executes the composite chain, returning the final value, state, accumulated side effects, module container, and error (error is the last returned value).
+- `Run(initialState StateLayer) (T, StateLayer, []EffectFunc, error)`  
+  Executes the composite chain, returning the final value, state, accumulated side effects, and error (with error as the last return value).
 
 ### Example Usage
 ```go
@@ -189,55 +191,62 @@ import (
 	"github.com/Feralthedogg/Novum/pkg/state"
 )
 
+// NetworkModule defines a simple network fetching interface.
+type NetworkModule interface {
+	Fetch(url string) (string, error)
+}
+
+// DefaultNetworkModule is a basic implementation of NetworkModule.
+type DefaultNetworkModule struct{}
+
+// Fetch returns a dummy data string from the given URL.
+func (n DefaultNetworkModule) Fetch(url string) (string, error) {
+	return "data from " + url, nil
+}
+
 func main() {
-	// Build a composite chain starting with an initial integer value.
-	comp := composite.Return(10).
+	// Create a compile-time dependency container with the network module.
+	deps := module.NewContainer[NetworkModule](DefaultNetworkModule{})
+
+	// Create a composite chain with an initial value of 10 and the injected dependencies.
+	comp := composite.Return(10, deps).
 		// Set a contract to ensure the value is non-negative.
 		WithContract(func(n int) bool {
 			return n >= 0
 		}).
-		// Bind operation: add 10 to the value.
-		Bind(func(n int) composite.NovumComposite[int] {
+		// Bind: add 10 to the value.
+		Bind(func(n int, deps module.Container[NetworkModule]) composite.NovumComposite[int, module.Container[NetworkModule]] {
 			newValue := n + 10
-			return composite.Return(newValue).
-				WithEffect(effect.LogEffect{Message: "Added 10 to the value"})
+			return composite.Return(newValue, deps).
+				WithEffect(effect.LogEffect("Added 10 to the value"))
 		}).
-		// Bind operation: multiply the value by 2.
-		Bind(func(n int) composite.NovumComposite[int] {
+		// Bind: multiply the value by 2.
+		Bind(func(n int, deps module.Container[NetworkModule]) composite.NovumComposite[int, module.Container[NetworkModule]] {
 			newValue := n * 2
-			return composite.Return(newValue).
-				WithEffect(effect.LogEffect{Message: "Multiplied the value by 2"})
+			return composite.Return(newValue, deps).
+				WithEffect(effect.LogEffect("Multiplied the value by 2"))
 		}).
-		// Bind operation: register a network module.
-		Bind(func(n int) composite.NovumComposite[int] {
-			cont := module.NewContainer()
-			cont.Register("network", DefaultNetworkModule{})
-			return composite.Return(n).
-				WithModule(cont).
-				WithEffect(effect.LogEffect{Message: "Registered network module"})
+		// Bind: log that the network module is registered.
+		Bind(func(n int, deps module.Container[NetworkModule]) composite.NovumComposite[int, module.Container[NetworkModule]] {
+			return composite.Return(n, deps).
+				WithEffect(effect.LogEffect("Network module is registered"))
 		}).
-		// Bind operation: simulate network module usage.
-		Bind(func(n int) composite.NovumComposite[int] {
-			mod, ok := composite.Return(n).ResolveModule("network")
-			if ok {
-				network := mod.(NetworkModule)
-				data, err := network.Fetch("https://api.example.com/data")
-				if err != nil {
-					return composite.Return(n).
-						WithEffect(effect.LogEffect{Message: "Error fetching data from network"})
-				}
-				return composite.Return(n).
-					WithEffect(effect.LogEffect{Message: "Fetched data: " + data})
+		// Bind: use the network module to fetch data.
+		Bind(func(n int, deps module.Container[NetworkModule]) composite.NovumComposite[int, module.Container[NetworkModule]] {
+			data, err := deps.GetNetwork().Fetch("https://api.example.com/data")
+			if err != nil {
+				return composite.Return(n, deps).
+					WithEffect(effect.LogEffect("Error fetching data from network"))
 			}
-			return composite.Return(n).
-				WithEffect(effect.LogEffect{Message: "Network module not found"})
+			return composite.Return(n, deps).
+				WithEffect(effect.LogEffect("Fetched data: " + data))
 		})
 
 	// Create an initial state.
 	initialState := state.NewStateLayer(0)
 
 	// Run the composite chain.
-	finalValue, finalState, effects, modules, err := comp.Run(initialState)
+	finalValue, finalState, effects, err := comp.Run(initialState)
 
 	// Print the results.
 	if err != nil {
@@ -251,23 +260,7 @@ func main() {
 				fmt.Println(" -", logEff.Message)
 			}
 		}
-		if modules != nil {
-			if mod, ok := modules.Resolve("network"); ok {
-				fmt.Println("Network module is registered:", mod)
-			}
-		}
 	}
-}
-
-// Dummy NetworkModule implementation for composite example.
-type NetworkModule interface {
-	Fetch(url string) (string, error)
-}
-
-type DefaultNetworkModule struct{}
-
-func (n DefaultNetworkModule) Fetch(url string) (string, error) {
-	return "data from " + url, nil
 }
 ```
 

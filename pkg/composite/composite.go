@@ -7,35 +7,36 @@ import (
 	"fmt"
 
 	"github.com/Feralthedogg/Novum/pkg/effect"
-	"github.com/Feralthedogg/Novum/pkg/module"
-	"github.com/Feralthedogg/Novum/pkg/state"
+	st "github.com/Feralthedogg/Novum/pkg/state"
 )
 
-// NovumComposite is a generic structure that combines a value with state transitions, side effects,
-// contract validation, error handling, and an optional module container.
-type NovumComposite[T any] struct {
+// NovumComposite chains computations with state transitions, side effects, and contract checks.
+// The Deps generic parameter includes compile‑time dependencies (including modules).
+type NovumComposite[T any, Deps any] struct {
 	value      T
-	stateFn    func(state.StateLayer) state.StateLayer
-	effects    []effect.Effect
+	stateFn    func(st.StateLayer) st.StateLayer
+	effects    []effect.EffectFunc
 	contractFn func(T) bool
 	err        error
-	modules    *module.Container
+	deps       Deps
 }
 
-// Return wraps a value into a NovumComposite with default settings.
-func Return[T any](value T) NovumComposite[T] {
-	return NovumComposite[T]{
-		value:      value,
-		stateFn:    func(s state.StateLayer) state.StateLayer { return s },
-		effects:    []effect.Effect{},
+// Return wraps a value and dependencies into a NovumComposite.
+func Return[T any, Deps any](value T, deps Deps) NovumComposite[T, Deps] {
+	return NovumComposite[T, Deps]{
+		value: value,
+		stateFn: func(s st.StateLayer) st.StateLayer {
+			return s
+		},
+		effects:    nil,
 		contractFn: func(val T) bool { return true },
 		err:        nil,
-		modules:    nil,
+		deps:       deps,
 	}
 }
 
-// Bind chains the current composite with function f and combines state functions and effects.
-func (m NovumComposite[T]) Bind(f func(T) NovumComposite[T]) NovumComposite[T] {
+// Bind chains the current composite with function f and combines state transitions and effects.
+func (m NovumComposite[T, Deps]) Bind(f func(T, Deps) NovumComposite[T, Deps]) NovumComposite[T, Deps] {
 	if m.err != nil {
 		return m
 	}
@@ -43,64 +44,43 @@ func (m NovumComposite[T]) Bind(f func(T) NovumComposite[T]) NovumComposite[T] {
 		m.err = errors.New("contract violation before Bind: invalid value")
 		return m
 	}
-	next := f(m.value)
+	next := f(m.value, m.deps)
 	if next.err != nil {
 		m.err = fmt.Errorf("error in Bind: %w", next.err)
 		return m
 	}
-	combinedStateFn := func(s state.StateLayer) state.StateLayer {
-		intermediate := m.stateFn(s)
-		return next.stateFn(intermediate)
+	combinedStateFn := func(s st.StateLayer) st.StateLayer {
+		return next.stateFn(m.stateFn(s))
 	}
 	combinedEffects := append(m.effects, next.effects...)
-	var combinedModules *module.Container
-	if next.modules != nil {
-		combinedModules = next.modules
-	} else {
-		combinedModules = m.modules
-	}
-	return NovumComposite[T]{
+	return NovumComposite[T, Deps]{
 		value:      next.value,
 		stateFn:    combinedStateFn,
 		effects:    combinedEffects,
 		contractFn: next.contractFn,
 		err:        m.err,
-		modules:    combinedModules,
+		deps:       m.deps,
 	}
 }
 
-// WithEffect appends a new side effect.
-func (m NovumComposite[T]) WithEffect(e effect.Effect) NovumComposite[T] {
+// WithEffect appends a side effect.
+func (m NovumComposite[T, Deps]) WithEffect(e effect.EffectFunc) NovumComposite[T, Deps] {
 	m.effects = append(m.effects, e)
 	return m
 }
 
 // WithContract sets a new contract function.
-func (m NovumComposite[T]) WithContract(fn func(T) bool) NovumComposite[T] {
+func (m NovumComposite[T, Deps]) WithContract(fn func(T) bool) NovumComposite[T, Deps] {
 	m.contractFn = fn
 	return m
 }
 
-// WithModule sets the module container.
-func (m NovumComposite[T]) WithModule(container *module.Container) NovumComposite[T] {
-	m.modules = container
-	return m
-}
-
-// ResolveModule retrieves a module by name from the module container.
-func (m NovumComposite[T]) ResolveModule(name string) (interface{}, bool) {
-	if m.modules != nil {
-		return m.modules.Resolve(name)
-	}
-	return nil, false
-}
-
-// Run executes the composite chain with an initial state and returns the final value, state,
-// accumulated effects, module container, and error (error is returned last).
-func (m NovumComposite[T]) Run(initialState state.StateLayer) (T, state.StateLayer, []effect.Effect, *module.Container, error) {
+// Run executes the composite chain with an initial state and returns the final value,
+// state, accumulated side effects, and any error.
+func (m NovumComposite[T, Deps]) Run(initialState st.StateLayer) (T, st.StateLayer, []effect.EffectFunc, error) {
 	finalState := m.stateFn(initialState)
 	if !m.contractFn(m.value) {
-		return m.value, finalState, m.effects, m.modules, errors.New("final contract violation")
+		return m.value, finalState, m.effects, errors.New("final contract violation")
 	}
-	return m.value, finalState, m.effects, m.modules, m.err
+	return m.value, finalState, m.effects, m.err
 }
