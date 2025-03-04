@@ -1,4 +1,4 @@
-// pkg/composite/composite.go
+//
 
 package composite
 
@@ -7,11 +7,12 @@ import (
 	"fmt"
 
 	"github.com/Feralthedogg/Novum/pkg/effect"
+	"github.com/Feralthedogg/Novum/pkg/future"
 	st "github.com/Feralthedogg/Novum/pkg/state"
 )
 
 // NovumComposite chains computations with state transitions, side effects, and contract checks.
-// The Deps generic parameter includes compile‑time dependencies (including modules).
+// The Deps generic parameter includes compile‑time dependencies.
 type NovumComposite[T any, Deps any] struct {
 	value      T
 	stateFn    func(st.StateLayer) st.StateLayer
@@ -76,11 +77,39 @@ func (m NovumComposite[T, Deps]) WithContract(fn func(T) bool) NovumComposite[T,
 }
 
 // Run executes the composite chain with an initial state and returns the final value,
-// state, accumulated side effects, and any error.
+// final state, accumulated side effects, and any error.
 func (m NovumComposite[T, Deps]) Run(initialState st.StateLayer) (T, st.StateLayer, []effect.EffectFunc, error) {
 	finalState := m.stateFn(initialState)
 	if !m.contractFn(m.value) {
 		return m.value, finalState, m.effects, errors.New("final contract violation")
 	}
 	return m.value, finalState, m.effects, m.err
+}
+
+// ------------------------------
+// Future Integration Functions
+// ------------------------------
+
+// Fail creates a NovumComposite that immediately fails with the provided error.
+func Fail[T any, Deps any](err error, deps Deps) NovumComposite[T, Deps] {
+	return NovumComposite[T, Deps]{
+		value:      *new(T),
+		stateFn:    func(s st.StateLayer) st.StateLayer { return s },
+		effects:    nil,
+		contractFn: func(val T) bool { return false },
+		err:        err,
+		deps:       deps,
+	}
+}
+
+// FromFuture converts a future.Future[T] into a NovumComposite[T, Deps].
+// It awaits the result from the Future and wraps it into a composite.
+func FromFuture[T any, Deps any](f future.Future[T], deps Deps) NovumComposite[T, Deps] {
+	return Return[T, Deps](*new(T), deps).Bind(func(_ T, deps Deps) NovumComposite[T, Deps] {
+		res, err := f.Await()
+		if err != nil {
+			return Fail[T, Deps](err, deps)
+		}
+		return Return[T, Deps](res, deps)
+	})
 }
