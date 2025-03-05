@@ -2,14 +2,19 @@
 
 package state
 
-type StateLayer struct {
-	Counter int
+import "golang.org/x/exp/constraints"
+
+// StateLayer represents an immutable state with a numeric counter.
+type StateLayer[T constraints.Integer] struct {
+	Counter T
 }
 
-func NewStateLayer(initial int) StateLayer {
-	return StateLayer{Counter: initial}
+// NewStateLayer creates a new state with the given initial counter value.
+func NewStateLayer[T constraints.Integer](initial T) StateLayer[T] {
+	return StateLayer[T]{Counter: initial}
 }
 
-func (s StateLayer) Increment() StateLayer {
-	return StateLayer{Counter: s.Counter + 1}
+// Increment returns a new state with the counter incremented.
+func (s StateLayer[T]) Increment() StateLayer[T] {
+	return StateLayer[T]{Counter: s.Counter + 1}
 }

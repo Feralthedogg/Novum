@@ -10,13 +10,14 @@
 6. [Contract Checking](#contract-checking)
 7. [Composite](#composite)
    - [Future Integration](#future-integration)
+   - [Parallel Composite Integration](#parallel-composite-integration)
 8. [License](#license)
 
 ---
 
 ## Installation
 
-Novum is managed as a Go module. You can install it using the following command:
+Novum is managed as a Go module. To install, run:
 
 ```bash
 go get github.com/Feralthedogg/Novum
@@ -26,7 +27,7 @@ go get github.com/Feralthedogg/Novum
 
 ## Quick Start
 
-Below is a brief example demonstrating how to use Novum’s key features in a composite chain. This example shows both a synchronous chain and an asynchronous Future chain integrated with the Composite API.
+The following example demonstrates Novum's key features using composite chains. It shows both a synchronous chain and an asynchronous Future chain integrated with the Composite API.
 
 ```go
 package main
@@ -52,12 +53,26 @@ func (n DefaultNetworkModule) Fetch(url string) (string, error) {
 	return "data from " + url, nil
 }
 
+// FromFuture converts a future.Future[T] into a NovumComposite[T, Deps].
+// If the Future returns an error, it returns a composite with a failing contract and logs the error.
+func FromFuture[T any, Deps any](f future.Future[T], deps Deps) composite.NovumComposite[T, Deps] {
+	return composite.Return[T, Deps](*new(T), deps).Bind(func(_ T, deps Deps) composite.NovumComposite[T, Deps] {
+		res, err := f.Await()
+		if err != nil {
+			return composite.Return[T, Deps](*new(T), deps).
+				WithContract(func(val T) bool { return false }).
+				WithEffect(effect.NewLogEffect(fmt.Sprintf("Future error: %v", err)))
+		}
+		return composite.Return[T, Deps](res, deps)
+	})
+}
+
 func main() {
 	// Create a dependency container with the network module.
 	deps := module.NewContainer[NetworkModule](DefaultNetworkModule{})
 
 	// --- Synchronous Composite Example ---
-	comp := composite.Return(10, deps).
+	syncComp := composite.Return(10, deps).
 		WithContract(func(n int) bool { return n >= 0 }).
 		Bind(func(n int, deps module.Container[NetworkModule]) composite.NovumComposite[int, module.Container[NetworkModule]] {
 			newValue := n + 10
@@ -78,8 +93,8 @@ func main() {
 			return composite.Return(n, deps).
 				WithEffect(effect.NewLogEffect("Fetched data: " + data))
 		})
-	initialState := state.NewStateLayer(0)
-	finalValue, finalState, effects, err := comp.Run(initialState)
+	initialState := state.NewStateLayer[int](0)
+	finalValue, finalState, effects, err := syncComp.Run(initialState)
 	if err != nil {
 		fmt.Println("Synchronous Composite Error:", err)
 	} else {
@@ -87,7 +102,7 @@ func main() {
 		fmt.Printf("Synchronous Composite - Final State: %+v\n", finalState)
 		fmt.Println("Synchronous Composite - Executing Effects:")
 		for _, eff := range effects {
-			_ = eff() // Execute side effects.
+			_ = eff()
 		}
 	}
 
@@ -97,19 +112,31 @@ func main() {
 		time.Sleep(100 * time.Millisecond)
 		return 42, nil
 	})
-	// Convert the Future into a Composite chain using FromFuture.
-	compFuture := FromFuture(fut, deps).
+	futureComp := FromFuture(fut, deps).
 		Bind(func(n int, deps module.Container[NetworkModule]) composite.NovumComposite[int, module.Container[NetworkModule]] {
-			// Multiply the Future result by 3.
 			newValue := n * 3
 			return composite.Return(newValue, deps).
 				WithEffect(effect.NewLogEffect(fmt.Sprintf("Future result multiplied by 3: %d", newValue)))
 		})
-	futureResult, _, _, err := compFuture.Run(initialState)
+	futureResult, _, _, err := futureComp.Run(initialState)
 	if err != nil {
 		fmt.Println("Future Composite Error:", err)
 	} else {
 		fmt.Printf("Future Composite - Final Result: %d\n", futureResult)
+	}
+
+	// --- Parallel Composite Example ---
+	comps := []composite.NovumComposite[int, module.Container[NetworkModule]]{
+		composite.Return(1, deps).WithEffect(effect.NewLogEffect("Composite 1")),
+		composite.Return(2, deps).WithEffect(effect.NewLogEffect("Composite 2")),
+		composite.Return(3, deps).WithEffect(effect.NewLogEffect("Composite 3")),
+	}
+	parallelComp := composite.Parallel(comps)
+	parallelResult, _, _, err := parallelComp.Run(state.NewStateLayer[int](0))
+	if err != nil {
+		fmt.Println("Parallel Composite Error:", err)
+	} else {
+		fmt.Printf("Parallel Composite - Final Results: %+v\n", parallelResult)
 	}
 }
 ```
@@ -127,9 +154,9 @@ func main() {
 
 ### API
 
-- `NewStateLayer(initial int) StateLayer`  
+- `NewStateLayer(initial int) StateLayer[int]`  
   Creates a new state object with the specified initial value.
-- `(s StateLayer) Increment() StateLayer`  
+- `(s StateLayer[int]) Increment() StateLayer[int]`  
   Returns a new state object with the counter incremented.
 
 ---
@@ -165,7 +192,7 @@ func main() {
 
 ### API
 
-- `NewContainer[NetworkT any](network NetworkT) Container[NetworkT]`  
+- `NewContainer[NetworkT NetworkModule](network NetworkT) Container[NetworkT]`  
   Creates a new module container with the provided network module.
 - `GetNetwork() NetworkT`  
   Retrieves the stored network module.
@@ -192,7 +219,7 @@ func main() {
 
 ### Overview
 
-Novum Composite integrates state transitions, effect handling, and contract checks into a unified, chainable abstraction. This allows you to build complex operations as a chain of expressions.
+Novum Composite integrates state transitions, effect handling, and contract checks into a unified, chainable abstraction. It enables you to build complex operations as a chain of expressions.
 
 ### API
 
@@ -204,7 +231,7 @@ Novum Composite integrates state transitions, effect handling, and contract chec
   Adds a side effect to the chain.
 - `WithContract(func(T) bool) NovumComposite[T, Deps]`  
   Sets a contract for validation.
-- `Run(initialState StateLayer) (T, StateLayer, []EffectFunc, error)`  
+- `Run(initialState StateLayer[int]) (T, StateLayer[int], []EffectFunc, error)`  
   Executes the chain and returns the final value, state, effects, and any error.
 
 ### Future Integration
@@ -213,8 +240,7 @@ To integrate asynchronous operations, the following function converts a `future.
 
 ```go
 // FromFuture converts a future.Future[T] into a NovumComposite[T, Deps].
-// This function bridges asynchronous Future results with the composite chain.
-// If the Future returns an error, a composite with a failing contract and error logging is returned.
+// If the Future returns an error, the composite fails its contract and logs the error.
 func FromFuture[T any, Deps any](f future.Future[T], deps Deps) NovumComposite[T, Deps] {
 	return Return[T, Deps](*new(T), deps).Bind(func(_ T, deps Deps) NovumComposite[T, Deps] {
 		res, err := f.Await()
@@ -228,12 +254,57 @@ func FromFuture[T any, Deps any](f future.Future[T], deps Deps) NovumComposite[T
 }
 ```
 
-### Example Usage (see Quick Start above)
+### Parallel Composite Integration
 
-The example above demonstrates using Future in a composite chain by:
-- Creating a Future with `future.NewFuture`.
-- Converting it to a Composite using `FromFuture`.
-- Chaining additional operations with `Bind`.
+The `Parallel` function runs multiple composite chains concurrently and aggregates their results:
+
+```go
+// Parallel takes a slice of NovumComposite[T, Deps] and returns a composite whose value is a slice of T.
+// It runs all composites concurrently and aggregates their results. If any composite returns an error,
+// the first error is logged.
+func Parallel[T any, Deps any](comps []NovumComposite[T, Deps]) NovumComposite[[]T, Deps] {
+	deps := comps[0].deps
+	return Return[[]T, Deps](nil, deps).Bind(func(_ []T, deps Deps) NovumComposite[[]T, Deps] {
+		n := len(comps)
+		results := make([]T, n)
+		errCh := make(chan error, n)
+		effCh := make(chan []effect.EffectFunc, n)
+		var wg sync.WaitGroup
+		wg.Add(n)
+		for i, comp := range comps {
+			i, comp := i, comp // capture loop variables
+			go func() {
+				defer wg.Done()
+				res, _, effs, err := comp.Run(st.NewStateLayer[int](0))
+				errCh <- err
+				results[i] = res
+				effCh <- effs
+			}()
+		}
+		wg.Wait()
+		close(errCh)
+		close(effCh)
+		var firstErr error
+		totalEffects := []effect.EffectFunc{}
+		for err := range errCh {
+			if err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+		for effs := range effCh {
+			totalEffects = append(totalEffects, effs...)
+		}
+		if firstErr != nil {
+			return Return[[]T, Deps](results, deps).
+				WithEffect(effect.NewLogEffect(fmt.Sprintf("Parallel composite error: %v", firstErr)))
+		}
+		return Return[[]T, Deps](results, deps).
+			WithEffect(effect.NewLogEffect("Parallel composite executed successfully"))
+	}).WithContract(func(vals []T) bool {
+		return vals != nil
+	})
+}
+```
 
 ---
 

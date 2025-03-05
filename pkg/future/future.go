@@ -2,11 +2,13 @@
 
 package future
 
+// Future[T] represents the result of an asynchronous operation.
 type Future[T any] struct {
 	resultChan chan T
 	errChan    chan error
 }
 
+// NewFuture executes fn asynchronously and returns a Future[T].
 func NewFuture[T any](fn func() (T, error)) Future[T] {
 	f := Future[T]{
 		resultChan: make(chan T, 1),
@@ -23,6 +25,7 @@ func NewFuture[T any](fn func() (T, error)) Future[T] {
 	return f
 }
 
+// Await waits for and returns the result of the Future.
 func (f Future[T]) Await() (T, error) {
 	select {
 	case res := <-f.resultChan:
@@ -33,6 +36,7 @@ func (f Future[T]) Await() (T, error) {
 	}
 }
 
+// Bind applies fn to the result of f and returns a new Future[U].
 func Bind[T any, U any](f Future[T], fn func(T) (U, error)) Future[U] {
 	return NewFuture(func() (U, error) {
 		res, err := f.Await()
@@ -44,6 +48,7 @@ func Bind[T any, U any](f Future[T], fn func(T) (U, error)) Future[U] {
 	})
 }
 
+// Then is similar to Bind but for functions that don't return an error.
 func Then[T any, U any](f Future[T], fn func(T) U) Future[U] {
 	return Bind(f, func(res T) (U, error) {
 		return fn(res), nil
