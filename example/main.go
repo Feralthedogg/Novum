@@ -42,25 +42,37 @@ func FromFuture[T any, Deps any](f future.Future[T], deps Deps) composite.NovumC
 
 func main() {
 	// Create a dependency container with the network module.
-	deps := module.NewContainer[NetworkModule](DefaultNetworkModule{})
+	modContainer := module.NewContainer()
+	modContainer.Register("network", DefaultNetworkModule{})
 
 	// ---------------------------
 	// Synchronous Composite Example
 	// ---------------------------
-	syncComp := composite.Return(10, deps).
+	syncComp := composite.Return(10, modContainer).
 		WithContract(func(n int) bool { return n >= 0 }).
-		Bind(func(n int, deps module.Container[NetworkModule]) composite.NovumComposite[int, module.Container[NetworkModule]] {
+		Bind(func(n int, deps *module.Container) composite.NovumComposite[int, *module.Container] {
 			newValue := n + 10
 			return composite.Return(newValue, deps).
 				WithEffect(effect.NewLogEffect("Added 10 to the value"))
 		}).
-		Bind(func(n int, deps module.Container[NetworkModule]) composite.NovumComposite[int, module.Container[NetworkModule]] {
+		Bind(func(n int, deps *module.Container) composite.NovumComposite[int, *module.Container] {
 			newValue := n * 2
 			return composite.Return(newValue, deps).
 				WithEffect(effect.NewLogEffect("Multiplied the value by 2"))
 		}).
-		Bind(func(n int, deps module.Container[NetworkModule]) composite.NovumComposite[int, module.Container[NetworkModule]] {
-			data, err := deps.GetNetwork().Fetch("https://api.example.com/data")
+		Bind(func(n int, deps *module.Container) composite.NovumComposite[int, *module.Container] {
+			// Resolve the network module from the container.
+			mod, ok := deps.Resolve("network")
+			if !ok {
+				return composite.Return(n, deps).
+					WithEffect(effect.NewLogEffect("Network module not found"))
+			}
+			network, ok := mod.(NetworkModule)
+			if !ok {
+				return composite.Return(n, deps).
+					WithEffect(effect.NewLogEffect("Invalid network module type"))
+			}
+			data, err := network.Fetch("https://api.example.com/data")
 			if err != nil {
 				return composite.Return(n, deps).
 					WithEffect(effect.NewLogEffect("Error fetching data from network"))
@@ -90,14 +102,13 @@ func main() {
 		time.Sleep(100 * time.Millisecond)
 		return 42, nil
 	})
-	// Convert the Future into a Composite chain.
-	futureComp := FromFuture(fut, deps).
-		Bind(func(n int, deps module.Container[NetworkModule]) composite.NovumComposite[int, module.Container[NetworkModule]] {
+	futureComp := FromFuture(fut, modContainer).
+		Bind(func(n int, deps *module.Container) composite.NovumComposite[int, *module.Container] {
 			newValue := n * 3
 			return composite.Return(newValue, deps).
 				WithEffect(effect.NewLogEffect(fmt.Sprintf("Future result multiplied by 3: %d", newValue)))
 		})
-	futureResult, _, _, err := futureComp.Run(state.NewStateLayer[int](0))
+	futureResult, _, _, err := futureComp.Run(initialState)
 	if err != nil {
 		fmt.Println("Future Composite Error:", err)
 	} else {
@@ -107,10 +118,11 @@ func main() {
 	// ---------------------------
 	// Parallel Composite Example
 	// ---------------------------
-	comps := []composite.NovumComposite[int, module.Container[NetworkModule]]{
-		composite.Return(1, deps).WithEffect(effect.NewLogEffect("Composite 1")),
-		composite.Return(2, deps).WithEffect(effect.NewLogEffect("Composite 2")),
-		composite.Return(3, deps).WithEffect(effect.NewLogEffect("Composite 3")),
+	// Create a slice of composites to run in parallel.
+	comps := []composite.NovumComposite[int, *module.Container]{
+		composite.Return(1, modContainer).WithEffect(effect.NewLogEffect("Parallel composite 1")),
+		composite.Return(2, modContainer).WithEffect(effect.NewLogEffect("Parallel composite 2")),
+		composite.Return(3, modContainer).WithEffect(effect.NewLogEffect("Parallel composite 3")),
 	}
 	parallelComp := composite.Parallel(comps)
 	parallelResult, _, _, err := parallelComp.Run(state.NewStateLayer[int](0))
