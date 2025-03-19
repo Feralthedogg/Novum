@@ -1,5 +1,7 @@
 # Novum
 
+Novum is a zero‑cost abstraction framework for Go that integrates state management, effect handling, contract checking, dependency injection, and advanced composite patterns into a single, chainable API. It is designed to bring functional programming patterns (such as pattern matching, asynchronous operations, and parallel composition) into the Go ecosystem without compromising on performance.
+
 ## Table of Contents
 
 1. [Installation](#installation)
@@ -11,7 +13,8 @@
 7. [Composite](#composite)
    - [Future Integration](#future-integration)
    - [Parallel Composite Integration](#parallel-composite-integration)
-8. [License](#license)
+8. [Pattern Matching](#pattern-matching)
+9. [License](#license)
 
 ---
 
@@ -27,7 +30,7 @@ go get github.com/Feralthedogg/Novum
 
 ## Quick Start
 
-The following example demonstrates Novum's key features using composite chains. It shows both a synchronous chain and an asynchronous Future chain integrated with the Composite API.
+The following example demonstrates Novum’s key features using composite chains. It shows a synchronous chain, an asynchronous Future chain, and a parallel composite chain integrated with the module container.
 
 ```go
 package main
@@ -43,10 +46,12 @@ import (
 	"github.com/Feralthedogg/Novum/pkg/state"
 )
 
+// NetworkModule defines a simple network fetching interface.
 type NetworkModule interface {
 	Fetch(url string) (string, error)
 }
 
+// DefaultNetworkModule is a basic implementation of NetworkModule.
 type DefaultNetworkModule struct{}
 
 func (n DefaultNetworkModule) Fetch(url string) (string, error) {
@@ -54,7 +59,7 @@ func (n DefaultNetworkModule) Fetch(url string) (string, error) {
 }
 
 // FromFuture converts a future.Future[T] into a NovumComposite[T, Deps].
-// If the Future returns an error, it returns a composite with a failing contract and logs the error.
+// If the Future returns an error, the composite fails its contract and logs the error.
 func FromFuture[T any, Deps any](f future.Future[T], deps Deps) composite.NovumComposite[T, Deps] {
 	return composite.Return[T, Deps](*new(T), deps).Bind(func(_ T, deps Deps) composite.NovumComposite[T, Deps] {
 		res, err := f.Await()
@@ -69,23 +74,34 @@ func FromFuture[T any, Deps any](f future.Future[T], deps Deps) composite.NovumC
 
 func main() {
 	// Create a dependency container with the network module.
-	deps := module.NewContainer[NetworkModule](DefaultNetworkModule{})
+	modContainer := module.NewContainer()
+	modContainer.Register("network", DefaultNetworkModule{})
 
 	// --- Synchronous Composite Example ---
-	syncComp := composite.Return(10, deps).
+	syncComp := composite.Return(10, modContainer).
 		WithContract(func(n int) bool { return n >= 0 }).
-		Bind(func(n int, deps module.Container[NetworkModule]) composite.NovumComposite[int, module.Container[NetworkModule]] {
+		Bind(func(n int, deps *module.Container) composite.NovumComposite[int, *module.Container] {
 			newValue := n + 10
 			return composite.Return(newValue, deps).
 				WithEffect(effect.NewLogEffect("Added 10 to the value"))
 		}).
-		Bind(func(n int, deps module.Container[NetworkModule]) composite.NovumComposite[int, module.Container[NetworkModule]] {
+		Bind(func(n int, deps *module.Container) composite.NovumComposite[int, *module.Container] {
 			newValue := n * 2
 			return composite.Return(newValue, deps).
 				WithEffect(effect.NewLogEffect("Multiplied the value by 2"))
 		}).
-		Bind(func(n int, deps module.Container[NetworkModule]) composite.NovumComposite[int, module.Container[NetworkModule]] {
-			data, err := deps.GetNetwork().Fetch("https://api.example.com/data")
+		Bind(func(n int, deps *module.Container) composite.NovumComposite[int, *module.Container] {
+			mod, ok := deps.Resolve("network")
+			if !ok {
+				return composite.Return(n, deps).
+					WithEffect(effect.NewLogEffect("Network module not found"))
+			}
+			network, ok := mod.(NetworkModule)
+			if !ok {
+				return composite.Return(n, deps).
+					WithEffect(effect.NewLogEffect("Invalid network module type"))
+			}
+			data, err := network.Fetch("https://api.example.com/data")
 			if err != nil {
 				return composite.Return(n, deps).
 					WithEffect(effect.NewLogEffect("Error fetching data from network"))
@@ -107,13 +123,12 @@ func main() {
 	}
 
 	// --- Future Composite Example ---
-	// Create a Future that asynchronously returns 42 after 100ms.
 	fut := future.NewFuture(func() (int, error) {
 		time.Sleep(100 * time.Millisecond)
 		return 42, nil
 	})
-	futureComp := FromFuture(fut, deps).
-		Bind(func(n int, deps module.Container[NetworkModule]) composite.NovumComposite[int, module.Container[NetworkModule]] {
+	futureComp := FromFuture(fut, modContainer).
+		Bind(func(n int, deps *module.Container) composite.NovumComposite[int, *module.Container] {
 			newValue := n * 3
 			return composite.Return(newValue, deps).
 				WithEffect(effect.NewLogEffect(fmt.Sprintf("Future result multiplied by 3: %d", newValue)))
@@ -126,10 +141,10 @@ func main() {
 	}
 
 	// --- Parallel Composite Example ---
-	comps := []composite.NovumComposite[int, module.Container[NetworkModule]]{
-		composite.Return(1, deps).WithEffect(effect.NewLogEffect("Composite 1")),
-		composite.Return(2, deps).WithEffect(effect.NewLogEffect("Composite 2")),
-		composite.Return(3, deps).WithEffect(effect.NewLogEffect("Composite 3")),
+	comps := []composite.NovumComposite[int, *module.Container]{
+		composite.Return(1, modContainer).WithEffect(effect.NewLogEffect("Parallel composite 1")),
+		composite.Return(2, modContainer).WithEffect(effect.NewLogEffect("Parallel composite 2")),
+		composite.Return(3, modContainer).WithEffect(effect.NewLogEffect("Parallel composite 3")),
 	}
 	parallelComp := composite.Parallel(comps)
 	parallelResult, _, _, err := parallelComp.Run(state.NewStateLayer[int](0))
@@ -148,7 +163,7 @@ func main() {
 ### Overview
 
 - **Immutable State Transitions:**  
-  Instead of modifying state in place, Novum creates new state objects to ensure consistency and safe concurrency.
+  Instead of modifying state in place, Novum creates new state objects, ensuring consistency and safe concurrency.
 - **Context-Based Management:**  
   Each request or session maintains its own state, allowing predictable behavior in concurrent environments.
 
@@ -166,14 +181,14 @@ func main() {
 ### Overview
 
 - **Explicit Side Effect Separation:**  
-  Side effects like logging, network I/O, or file operations are encapsulated via the `EffectFunc` type, separating pure functions from impure ones.
+  Side effects such as logging, network I/O, or file operations are encapsulated via the `EffectFunc` type, keeping pure functions free of side effects.
 - **Optimized Execution:**  
   The side effect functions are simple and can be efficiently executed and inlined by the compiler.
 
 ### API
 
 - **`EffectFunc` Type:**  
-  A function type that represents a side effect.
+  A function type representing a side effect.
 - **`NewLogEffect` Function:**  
   Returns an `EffectFunc` that logs a given message.
 - `Perform(e EffectFunc) error`  
@@ -186,16 +201,20 @@ func main() {
 ### Overview
 
 - **Static Dependency Injection:**  
-  Novum uses static typing for modules, ensuring that dependencies are resolved at compile time.
-- **Simple Container:**  
-  A lightweight container allows modules (e.g., network modules) to be registered and retrieved.
+  Novum uses a module container that can store and resolve dependencies by key.
+- **Flexible and Type-Safe:**  
+  The container supports registering multiple modules and resolving them in a type-safe manner.
 
 ### API
 
-- `NewContainer[NetworkT NetworkModule](network NetworkT) Container[NetworkT]`  
-  Creates a new module container with the provided network module.
-- `GetNetwork() NetworkT`  
-  Retrieves the stored network module.
+- `NewContainer() *Container`  
+  Creates a new module container.
+- `Register(key string, module interface{})`  
+  Registers a module under a given key.
+- `Resolve(key string) (interface{}, bool)`  
+  Retrieves the module associated with a key.
+- `ResolveAs[T any](key string) (T, bool)`  
+  Retrieves the module as type T in a type-safe manner.
 
 ---
 
@@ -206,7 +225,7 @@ func main() {
 - **Design by Contract:**  
   Novum includes a lightweight mechanism for asserting preconditions and postconditions. If conditions are not met, errors are raised.
 - **Optional Enforcement:**  
-  Contracts can be enabled during development for safety and selectively disabled in production.
+  Contracts can be enabled during development for additional safety and selectively disabled in production.
 
 ### API
 
@@ -219,7 +238,7 @@ func main() {
 
 ### Overview
 
-Novum Composite integrates state transitions, effect handling, and contract checks into a unified, chainable abstraction. It enables you to build complex operations as a chain of expressions.
+Novum Composite integrates state transitions, effect handling, and contract checks into a single chainable abstraction. This enables you to build complex operations as a sequence of expressions.
 
 ### API
 
@@ -232,11 +251,11 @@ Novum Composite integrates state transitions, effect handling, and contract chec
 - `WithContract(func(T) bool) NovumComposite[T, Deps]`  
   Sets a contract for validation.
 - `Run(initialState StateLayer[int]) (T, StateLayer[int], []EffectFunc, error)`  
-  Executes the chain and returns the final value, state, effects, and any error.
+  Executes the chain and returns the final value, state, side effects, and error (if any).
 
 ### Future Integration
 
-To integrate asynchronous operations, the following function converts a `future.Future[T]` into a composite chain:
+To integrate asynchronous operations, use `FromFuture` to convert a `future.Future[T]` into a composite chain:
 
 ```go
 // FromFuture converts a future.Future[T] into a NovumComposite[T, Deps].
@@ -303,6 +322,183 @@ func Parallel[T any, Deps any](comps []NovumComposite[T, Deps]) NovumComposite[[
 	}).WithContract(func(vals []T) bool {
 		return vals != nil
 	})
+}
+```
+
+---
+
+## Pattern Matching
+
+Novum also includes a pure functional pattern matching module inspired by Elixir. It supports basic patterns:  
+- **Literal:** Matches if a value equals a given literal.  
+- **Var:** Matches any value and binds it to a variable.  
+- **Pin:** Matches only if a variable is already bound and equals the given value.  
+- **Cons:** Decomposes a list into head and tail.  
+- **Wildcard:** Matches any value without binding.
+
+```go
+// pkg/patternmatch/patternmatch.go
+package patternmatch
+
+import (
+	"fmt"
+	"reflect"
+)
+
+// Env is a persistent environment for variable bindings.
+type Env struct {
+	parent   *Env
+	bindings map[string]interface{}
+}
+
+// NewEnv creates a new empty environment.
+func NewEnv() *Env {
+	return &Env{
+		parent:   nil,
+		bindings: make(map[string]interface{}),
+	}
+}
+
+// Extend creates a new environment node with an additional binding.
+func (e *Env) Extend(key string, value interface{}) *Env {
+	return &Env{
+		parent:   e,
+		bindings: map[string]interface{}{key: value},
+	}
+}
+
+// Lookup searches for a binding in the environment chain.
+func (e *Env) Lookup(key string) (interface{}, bool) {
+	if val, ok := e.bindings[key]; ok {
+		return val, true
+	}
+	if e.parent != nil {
+		return e.parent.Lookup(key)
+	}
+	return nil, false
+}
+
+// Pattern is the interface for pattern matching.
+type Pattern interface {
+	Match(value interface{}, env *Env) (bool, *Env, error)
+}
+
+// Literal pattern matches if the value equals the literal.
+type Literal[T comparable] struct {
+	Value T
+}
+
+func (l Literal[T]) Match(value interface{}, env *Env) (bool, *Env, error) {
+	v, ok := value.(T)
+	if !ok {
+		return false, env, fmt.Errorf("Literal: type mismatch, expected %T", l.Value)
+	}
+	if v == l.Value {
+		return true, env, nil
+	}
+	return false, env, fmt.Errorf("Literal: %v does not equal %v", v, l.Value)
+}
+
+// Var pattern matches any value and binds it to a variable.
+type Var struct {
+	Name string
+}
+
+func (v Var) Match(value interface{}, env *Env) (bool, *Env, error) {
+	if oldVal, ok := env.Lookup(v.Name); ok {
+		if reflect.DeepEqual(oldVal, value) {
+			return true, env, nil
+		}
+		return false, env, fmt.Errorf("Var: variable '%s' already bound to %v, cannot rebind to %v", v.Name, oldVal, value)
+	}
+	return true, env.Extend(v.Name, value), nil
+}
+
+// Pin pattern matches only if the variable is already bound and equals the given value.
+type Pin struct {
+	Name string
+}
+
+func (p Pin) Match(value interface{}, env *Env) (bool, *Env, error) {
+	oldVal, ok := env.Lookup(p.Name)
+	if !ok {
+		return false, env, fmt.Errorf("Pin: variable '%s' not bound", p.Name)
+	}
+	if reflect.DeepEqual(oldVal, value) {
+		return true, env, nil
+	}
+	return false, env, fmt.Errorf("Pin: variable '%s' bound to %v does not match %v", p.Name, oldVal, value)
+}
+
+// Cons pattern matches a non-empty list by decomposing it into head and tail.
+type Cons struct {
+	Head Pattern
+	Tail Pattern
+}
+
+func (c Cons) Match(value interface{}, env *Env) (bool, *Env, error) {
+	rv := reflect.ValueOf(value)
+	if rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array {
+		return false, env, fmt.Errorf("Cons: value is not a slice or array")
+	}
+	if rv.Len() == 0 {
+		return false, env, fmt.Errorf("Cons: empty list cannot match")
+	}
+	ok, newEnv, err := c.Head.Match(rv.Index(0).Interface(), env)
+	if !ok {
+		return false, env, fmt.Errorf("Cons: head match failed: %w", err)
+	}
+	tail := make([]interface{}, 0, rv.Len()-1)
+	for i := 1; i < rv.Len(); i++ {
+		tail = append(tail, rv.Index(i).Interface())
+	}
+	return c.Tail.Match(tail, newEnv)
+}
+
+// Wildcard matches any value without binding.
+type Wildcard struct{}
+
+func (Wildcard) Match(value interface{}, env *Env) (bool, *Env, error) {
+	return true, env, nil
+}
+```
+
+### Usage Example for Pattern Matching
+
+```go
+package main
+
+import (
+	"fmt"
+
+	"github.com/Feralthedogg/Novum/pkg/patternmatch"
+)
+
+func main() {
+	// Literal pattern matching.
+	lit := patternmatch.Literal[int]{Value: 42}
+	ok, env, err := lit.Match(42, patternmatch.NewEnv())
+	fmt.Printf("Literal match: %v, Env: %+v, Error: %v\n", ok, env, err)
+
+	// Variable pattern matching.
+	varPat := patternmatch.Var{Name: "x"}
+	ok, env, err = varPat.Match(100, patternmatch.NewEnv())
+	fmt.Printf("Variable match: %v, Env: %+v, Error: %v\n", ok, env, err)
+
+	// Pin pattern matching.
+	baseEnv := patternmatch.NewEnv()
+	baseEnv = baseEnv.Extend("y", 200)
+	pinPat := patternmatch.Pin{Name: "y"}
+	ok, env, err = pinPat.Match(200, baseEnv)
+	fmt.Printf("Pin match: %v, Env: %+v, Error: %v\n", ok, env, err)
+
+	// Cons pattern matching.
+	consPat := patternmatch.Cons{
+		Head: patternmatch.Var{Name: "head"},
+		Tail: patternmatch.Wildcard{},
+	}
+	ok, env, err = consPat.Match([]interface{}{1, 2, 3}, patternmatch.NewEnv())
+	fmt.Printf("Cons match: %v, Env: %+v, Error: %v\n", ok, env, err)
 }
 ```
 

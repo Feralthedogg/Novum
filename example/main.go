@@ -9,6 +9,7 @@ import (
 	"github.com/Feralthedogg/Novum/pkg/effect"
 	"github.com/Feralthedogg/Novum/pkg/future"
 	"github.com/Feralthedogg/Novum/pkg/module"
+	"github.com/Feralthedogg/Novum/pkg/patternmatch"
 	"github.com/Feralthedogg/Novum/pkg/state"
 )
 
@@ -90,7 +91,7 @@ func main() {
 		fmt.Printf("Synchronous Composite - Final State: %+v\n", finalState)
 		fmt.Println("Synchronous Composite - Executing Effects:")
 		for _, eff := range effects {
-			_ = eff()
+			_ = eff() // Execute side effects.
 		}
 	}
 
@@ -118,7 +119,6 @@ func main() {
 	// ---------------------------
 	// Parallel Composite Example
 	// ---------------------------
-	// Create a slice of composites to run in parallel.
 	comps := []composite.NovumComposite[int, *module.Container]{
 		composite.Return(1, modContainer).WithEffect(effect.NewLogEffect("Parallel composite 1")),
 		composite.Return(2, modContainer).WithEffect(effect.NewLogEffect("Parallel composite 2")),
@@ -131,4 +131,35 @@ func main() {
 	} else {
 		fmt.Printf("Parallel Composite - Final Results: %+v\n", parallelResult)
 	}
+
+	// ---------------------------
+	// Pattern Matching Example
+	// ---------------------------
+	// Using the patternmatch package to match patterns against values.
+	// We demonstrate Literal, Var, Pin, Cons, and Wildcard patterns.
+	env := patternmatch.NewEnv()
+
+	// Literal pattern: match the integer 42.
+	litPat := patternmatch.Literal[int]{Value: 42}
+	ok, env, err := litPat.Match(42, env)
+	fmt.Printf("Literal match: %v, Env: %+v, Err: %v\n", ok, env, err)
+
+	// Var pattern: bind any value to variable "x".
+	varPat := patternmatch.Var{Name: "x"}
+	ok, env, err = varPat.Match(100, env)
+	fmt.Printf("Var match: %v, Env: %+v, Err: %v\n", ok, env, err)
+
+	// Pin pattern: match a value against an already bound variable.
+	// Let's use "x" bound from above.
+	pinPat := patternmatch.Pin{Name: "x"}
+	ok, env, err = pinPat.Match(100, env)
+	fmt.Printf("Pin match: %v, Env: %+v, Err: %v\n", ok, env, err)
+
+	// Cons pattern: match a list with a head and tail.
+	consPat := patternmatch.Cons{
+		Head: patternmatch.Var{Name: "head"},
+		Tail: patternmatch.Wildcard{},
+	}
+	ok, env, err = consPat.Match([]interface{}{1, 2, 3}, env)
+	fmt.Printf("Cons match: %v, Env: %+v, Err: %v\n", ok, env, err)
 }
